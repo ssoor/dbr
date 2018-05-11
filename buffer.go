@@ -1,6 +1,6 @@
 package dbr
 
-import "strings"
+import "bytes"
 
 // Buffer collects strings, and values that are ready to be interpolated.
 // This is used internally to efficiently build SQL statement.
@@ -13,7 +13,7 @@ type Buffer interface {
 }
 
 type buffer struct {
-	strings.Builder
+	bytes.Buffer
 	v []interface{}
 }
 

@@ -1,9 +1,9 @@
 package dbr
 
 import (
+	"bytes"
 	"database/sql/driver"
 	"reflect"
-	"strings"
 )
 
 var NameMapping = camelCaseToSnakeCase
@@ -28,7 +28,7 @@ func toLower(b byte) byte {
 }
 
 func camelCaseToSnakeCase(name string) string {
-	var buf strings.Builder
+	var buf bytes.Buffer
 	buf.Grow(len(name) * 2)
 
 	for i := 0; i < len(name); i++ {

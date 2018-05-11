@@ -1,8 +1,8 @@
 package dialect
 
 import (
+	"bytes"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -13,7 +13,7 @@ func (d mysql) QuoteIdent(s string) string {
 }
 
 func (d mysql) EncodeString(s string) string {
-	var buf strings.Builder
+	var buf bytes.Buffer
 
 	buf.WriteRune('\'')
 	// https://dev.mysql.com/doc/refman/5.7/en/string-literals.html
