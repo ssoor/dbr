@@ -2,6 +2,7 @@ package dbr
 
 import (
 	"database/sql/driver"
+	"encoding"
 	"reflect"
 	"strconv"
 	"strings"
@@ -15,37 +16,24 @@ type interpolator struct {
 	N            int
 }
 
-// InterpolateForDialect replaces placeholder
-// in query with corresponding value in dialect.
-//
-// It can be also used for debugging custom Builder.
-//
-// Every time you call database/sql's db.Query("SELECT ...") method,
-// under the hood, the mysql driver will create a prepared statement,
-// execute it, and then throw it away. This has a big performance cost.
-//
-// gocraft/dbr doesn't use prepared statements.
-// We ported mysql's query escape functionality directly into our package,
-// which means we interpolate all of those question marks with
-// their arguments before they get to MySQL.
-// The result of this is that it's way faster, and just as secure.
-//
-// Check out these benchmarks from https://github.com/tyler-smith/golang-sql-benchmark.
+// InterpolateForDialect replaces placeholder in query with corresponding value in dialect
 func InterpolateForDialect(query string, value []interface{}, d Dialect) (string, error) {
 	i := interpolator{
 		Buffer:  NewBuffer(),
 		Dialect: d,
 	}
-	err := i.interpolate(query, value, true)
+	err := i.interpolate(query, value)
 	if err != nil {
 		return "", err
 	}
 	return i.String(), nil
 }
 
-var escapedPlaceholder = strings.Repeat(placeholder, 2)
+func (i *interpolator) interpolate(query string, value []interface{}) error {
+	if strings.Count(query, placeholder) != len(value) {
+		return ErrPlaceholderCount
+	}
 
-func (i *interpolator) interpolate(query string, value []interface{}, topLevel bool) error {
 	valueIndex := 0
 
 	for {
@@ -54,24 +42,13 @@ func (i *interpolator) interpolate(query string, value []interface{}, topLevel b
 			break
 		}
 
-		// escape placeholder by repeating it twice
-		if strings.HasPrefix(query[index:], escapedPlaceholder) {
-			i.WriteString(query[:index+len(escapedPlaceholder)])
-			query = query[index+len(escapedPlaceholder):]
-			continue
-		}
-
-		if valueIndex >= len(value) {
-			return ErrPlaceholderCount
-		}
-
 		i.WriteString(query[:index])
 		if _, ok := value[valueIndex].([]byte); ok && i.IgnoreBinary {
 			i.WriteString(i.Placeholder(i.N))
 			i.N++
 			i.WriteValue(value[valueIndex])
 		} else {
-			err := i.encodePlaceholder(value[valueIndex], topLevel)
+			err := i.encodePlaceholder(value[valueIndex])
 			if err != nil {
 				return err
 			}
@@ -80,36 +57,30 @@ func (i *interpolator) interpolate(query string, value []interface{}, topLevel b
 		valueIndex++
 	}
 
-	if valueIndex != len(value) {
-		return ErrPlaceholderCount
-	}
-
 	// placeholder not found; write remaining query
 	i.WriteString(query)
 
 	return nil
 }
 
-var (
-	typeTime = reflect.TypeOf(time.Time{})
-)
-
-func (i *interpolator) encodePlaceholder(value interface{}, topLevel bool) error {
+func (i *interpolator) encodePlaceholder(value interface{}) error {
 	if builder, ok := value.(Builder); ok {
 		pbuf := NewBuffer()
 		err := builder.Build(i.Dialect, pbuf)
 		if err != nil {
 			return err
 		}
-		paren := false
+		paren := true
 		switch value.(type) {
-		case *SelectStmt, *union:
-			paren = !topLevel
+		case *SelectStmt:
+		case *union:
+		default:
+			paren = false
 		}
 		if paren {
 			i.WriteString("(")
 		}
-		err = i.interpolate(pbuf.String(), pbuf.Value(), false)
+		err = i.interpolate(pbuf.String(), pbuf.Value())
 		if err != nil {
 			return err
 		}
@@ -150,8 +121,18 @@ func (i *interpolator) encodePlaceholder(value interface{}, topLevel bool) error
 		i.WriteString(strconv.FormatFloat(v.Float(), 'f', -1, 64))
 		return nil
 	case reflect.Struct:
-		if v.Type() == typeTime {
+		if v.Type() == reflect.TypeOf(time.Time{}) {
 			i.WriteString(i.EncodeTime(v.Interface().(time.Time)))
+			return nil
+		} else if u, ok := v.Interface().(encoding.TextMarshaler); ok {
+			data, err := u.MarshalText()
+			if nil != err {
+				return err
+			}
+
+			i.WriteString("'")
+			i.WriteString(string(data))
+			i.WriteString("'")
 			return nil
 		}
 	case reflect.Slice:
@@ -169,7 +150,7 @@ func (i *interpolator) encodePlaceholder(value interface{}, topLevel bool) error
 			if n > 0 {
 				i.WriteString(",")
 			}
-			err := i.encodePlaceholder(v.Index(n).Interface(), topLevel)
+			err := i.encodePlaceholder(v.Index(n).Interface())
 			if err != nil {
 				return err
 			}
@@ -181,7 +162,7 @@ func (i *interpolator) encodePlaceholder(value interface{}, topLevel bool) error
 			i.WriteString("NULL")
 			return nil
 		}
-		return i.encodePlaceholder(v.Elem().Interface(), topLevel)
+		return i.encodePlaceholder(v.Elem().Interface())
 	}
 	return ErrNotSupported
 }
